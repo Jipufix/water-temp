@@ -8,7 +8,6 @@ temps = []
 times = []
 start_time = time.time()
 
-# Create the plot and keep it persistent
 plt.ion()
 fig, ax = plt.subplots()
 line_plot, = ax.plot([], [], label="Temp (°C)", color='blue')
@@ -18,9 +17,18 @@ ax.set_title("Live Temperature Data")
 ax.legend()
 
 print("Listening for temperature data...")
+stop_requested = False
+
+def on_key(event):
+    global stop_requested
+    if event.key == 'q':
+        stop_requested = True
+        print("Stopping plot (key 'q' pressed).")
+
+fig.canvas.mpl_connect('key_press_event', on_key)
 
 try:
-    while True:
+    while not stop_requested:
         line = ser.readline().decode().strip()
         print("Serial says:", line)
 
@@ -32,20 +40,21 @@ try:
                 temps.append(temp)
                 times.append(time.time() - start_time)
 
-                # Update plot without clearing
                 line_plot.set_data(times, temps)
-                ax.relim()  # Recalculate limits based on new data
-                ax.autoscale_view()  # Auto-scale the view
+                ax.relim()
+                ax.autoscale_view()
 
-                plt.draw()  # Draw the updated plot
-                plt.pause(0.05)  # Shorter pause for faster updates
+                plt.draw()
+                plt.pause(0.05)
 
             except ValueError:
                 print("Couldn't parse temperature from:", line)
                 continue
 
 except KeyboardInterrupt:
-    print("Plotting stopped by user.")
+    print("Plotting stopped by user (Ctrl+C).")
+
+finally:
     ser.close()
     plt.ioff()
     plt.show()
