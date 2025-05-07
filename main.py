@@ -4,9 +4,9 @@ from onewire import OneWire
 import ds18x20
 
 # Pin configuration
-datapin = machine.Pin(4)  # Data pin for DS18B20
-red_led = machine.Pin(5, machine.Pin.OUT)
-green_led = machine.Pin(6, machine.Pin.OUT)
+datapin = machine.Pin(2)  # Data pin for DS18B20
+red_led = machine.Pin(11, machine.Pin.OUT)
+green_led = machine.Pin(9, machine.Pin.OUT)
 
 THRESHOLD = 25.0
 
