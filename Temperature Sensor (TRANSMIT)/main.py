@@ -1,4 +1,5 @@
 import machine
+from machine import ADC, Pin
 import time
 import uasyncio as asyncio
 import aioble
@@ -12,16 +13,41 @@ BLE_DEVICE_NAME = "TempMon"
 SERVICE_UUID = bluetooth.UUID("af65f22f-0b5c-4ac5-a2a1-76606258c2b0")
 CHARACTERISTIC_UUID = bluetooth.UUID("19b10001-e8f2-537e-4f6c-d104768a1214")
 
+# Digit drawing functions
+DIGITS = {
+    "0": ["#####", "#   #", "#   #", "#   #", "#####"],
+    "1": ["  #  ", " ##  ", "  #  ", "  #  ", "#####"],
+    "2": ["#####", "    #", "#####", "#    ", "#####"],
+    "3": ["#####", "    #", "#####", "    #", "#####"],
+    "4": ["#   #", "#   #", "#####", "    #", "    #"],
+    "5": ["#####", "#    ", "#####", "    #", "#####"],
+    "6": ["#####", "#    ", "#####", "#   #", "#####"],
+    "7": ["#####", "    #", "   # ", "  #  ", "  #  "],
+    "8": ["#####", "#   #", "#####", "#   #", "#####"],
+    "9": ["#####", "#   #", "#####", "    #", "#####"],
+    ".": ["     ", "     ", "     ", "     ", "  #  "]
+}
+
+# Constants Setup
+global threshold     # in F
+THRESHOLD_MIN = 104.0
+THRESHOLD_MAX = 120.0
+OBSERVED_MIN = 180
+OBSERVED_MAX = 3200
+
 # Hardware Setup
-THRESHOLD = 40.0
 i2c = machine.I2C(0, scl=machine.Pin(5), sda=machine.Pin(4), freq=100000)
 oled = SSD1306_I2C(128, 64, i2c)
-datapin = machine.Pin(2)
+temp_pin = machine.Pin(2)
+knob = ADC(Pin(1))
 red_led = machine.Pin(11, machine.Pin.OUT)
 green_led = machine.Pin(9, machine.Pin.OUT)
 
+# Potentiometer Setup
+knob.atten(ADC.ATTN_11DB)  # Full 0-3.3V range
+
 # DS18B20 Initialization
-ow = OneWire(datapin)
+ow = OneWire(temp_pin)
 ds = ds18x20.DS18X20(ow)
 roms = ds.scan()
 if not roms:
@@ -39,7 +65,7 @@ temp_characteristic = aioble.Characteristic(
 )
 aioble.register_services(temp_service)
 
-# Resolution configuration
+# Resolution Configuration
 def set_resolution(rom, res_bits):
     assert res_bits in (9, 10, 11, 12)
     config = {9: 0x1F, 10: 0x3F, 11: 0x5F, 12: 0x7F}[res_bits]
@@ -52,27 +78,22 @@ def set_resolution(rom, res_bits):
 
 for rom in roms:
     set_resolution(rom, 9)
+    
+# Arduino-style map function for MicroPython
+def map_value(x, in_min, in_max, out_min, out_max):
+    return (x - in_min) * (out_max - out_min) // (in_max - in_min) + out_min
+
+# Convert from C to F
+def c_to_f(temp):
+    return temp * 1.8 + 32
+
+
 
 # Temperature reading
 async def read_temp():
     ds.convert_temp()
     await asyncio.sleep_ms(750)
     return ds.read_temp(roms[0])
-
-# Digit drawing functions
-DIGITS = {
-    "0": ["#####", "#   #", "#   #", "#   #", "#####"],
-    "1": ["  #  ", " ##  ", "  #  ", "  #  ", "#####"],
-    "2": ["#####", "    #", "#####", "#    ", "#####"],
-    "3": ["#####", "    #", "#####", "    #", "#####"],
-    "4": ["#   #", "#   #", "#####", "    #", "    #"],
-    "5": ["#####", "#    ", "#####", "    #", "#####"],
-    "6": ["#####", "#    ", "#####", "#   #", "#####"],
-    "7": ["#####", "    #", "   # ", "  #  ", "  #  "],
-    "8": ["#####", "#   #", "#####", "#   #", "#####"],
-    "9": ["#####", "#   #", "#####", "    #", "#####"],
-    ".": ["     ", "     ", "     ", "     ", "  #  "]
-}
 
 def draw_huge_digit(oled, char, x, y):
     pattern = DIGITS.get(char, [" "]*5)
@@ -109,11 +130,20 @@ async def ble_advertise():
 # Main temperature update loop
 async def update_display():
     last_temp = None
+    threshold = 40.0
     while True:
         temp = await read_temp()
+        temp = c_to_f(temp)
+        
+        # Update threshold from potentiometer
+        raw_value = knob.read()
+        print(f"Raw potentiometer value: {raw_value}")  # <-- Add this line
+        new_threshold = map_value(raw_value, OBSERVED_MIN, OBSERVED_MAX, THRESHOLD_MIN, THRESHOLD_MAX)
+        if new_threshold != threshold:
+            threshold = new_threshold
         
         # Update LEDs
-        if temp >= THRESHOLD:
+        if temp >= threshold:
             red_led.on()
             green_led.off()
             danger_text = "DANGER"
@@ -123,17 +153,20 @@ async def update_display():
             danger_text = ""
         
         # Update display
-        if last_temp != temp:
-            oled.fill(0)
-            if danger_text:
-                oled.text(danger_text, 10, 0, 1)
-            draw_huge_text(oled, f"{temp:.1f}", 0, 20)
-            oled.show()
-            last_temp = temp
+        oled.fill(0)
+        # Draw temperature in large digits
+        draw_huge_text(oled, f"{int(temp)}", 0, 20)
+        # Draw threshold in top right corner, small font
+        oled.text(f"THR:{int(threshold)}", 60, 0, 1)
+        # Optionally, display DANGER text
+        if danger_text:
+            oled.text(danger_text, 0, 54, 1)
+        oled.show()
+        last_temp = temp
         
         # Update BLE
         temp_characteristic.write(str(temp).encode(), send_update=True)
-        print(f"Temp: {temp}°C | BLE updated")
+        print(f"Temp: {temp}°F | Threshold: {threshold} | BLE updated")
 
 # Main async loop
 async def main():
