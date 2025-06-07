@@ -1,11 +1,12 @@
 import machine
-from machine import ADC, Pin
 import time
 import uasyncio as asyncio
 import aioble
 import bluetooth
-from onewire import OneWire
+import struct
 import ds18x20
+from onewire import OneWire
+from machine import ADC, Pin
 from ssd1306 import SSD1306_I2C
 
 # BLE Configuration
@@ -29,9 +30,9 @@ DIGITS = {
 }
 
 # Constants Setup
-global threshold     # in F
 THRESHOLD_MIN = 104.0
 THRESHOLD_MAX = 120.0
+threshold = THRESHOLD_MIN
 OBSERVED_MIN = 180
 OBSERVED_MAX = 3200
 
@@ -130,14 +131,13 @@ async def ble_advertise():
 # Main temperature update loop
 async def update_display():
     last_temp = None
-    threshold = 40.0
+    global threshold     # in F
     while True:
         temp = await read_temp()
         temp = c_to_f(temp)
         
         # Update threshold from potentiometer
         raw_value = knob.read()
-        print(f"Raw potentiometer value: {raw_value}")  # <-- Add this line
         new_threshold = map_value(raw_value, OBSERVED_MIN, OBSERVED_MAX, THRESHOLD_MIN, THRESHOLD_MAX)
         if new_threshold != threshold:
             threshold = new_threshold
@@ -146,11 +146,9 @@ async def update_display():
         if temp >= threshold:
             red_led.on()
             green_led.off()
-            danger_text = "DANGER"
         else:
             red_led.off()
             green_led.on()
-            danger_text = ""
         
         # Update display
         oled.fill(0)
@@ -158,15 +156,20 @@ async def update_display():
         draw_huge_text(oled, f"{int(temp)}", 0, 20)
         # Draw threshold in top right corner, small font
         oled.text(f"THR:{int(threshold)}", 60, 0, 1)
-        # Optionally, display DANGER text
-        if danger_text:
-            oled.text(danger_text, 0, 54, 1)
         oled.show()
         last_temp = temp
         
-        # Update BLE
-        temp_characteristic.write(str(temp).encode(), send_update=True)
-        print(f"Temp: {temp}°F | Threshold: {threshold} | BLE updated")
+        
+        # BLE message
+        payload = struct.pack("<ff", temp, threshold)  # Little-endian, 8 bytes total
+        try:
+            temp_characteristic.write(payload, send_update=True)
+            print(f"Sent: {temp}°F, {threshold}°F")
+        except Exception as e:
+            print("BLE write failed:", e)
+
+
+        
 
 # Main async loop
 async def main():
